@@ -62,6 +62,19 @@ flowchart TD
 * **Feast Feature Store**: Feast provides an offline feature store for generating point-in-time correct training datasets, and an online feature store for extremely low-latency, real-time feature retrieval during inference.
 * **Redis Caching**: Prediction responses are cached in Redis (with a TTL of 300 seconds) to heavily reduce repeated ML inference latency on identical requests.
 
+### Current Model Configuration
+
+**TimesFM Context Window**: The current implementation uses a maximum context window of 512 observations. Support for larger context windows can be enabled in future model configurations.
+
+### Future Enhancements
+
+- Live market streaming
+- Docker deployment
+- Kubernetes deployment
+- GPU quantization support
+- Multi-market screening
+- LLM-generated market summaries
+
 ---
 
 ## 🛠 Prerequisites
@@ -178,6 +191,10 @@ uvicorn api.app:app --reload
 | `/ws/screener` | WebSocket updates |
 
 ### API Examples
+
+> **Note for Windows Users:** The examples below use `curl`. If you are using PowerShell, you can replace the `curl -X GET` commands with `Invoke-RestMethod -Uri`. For example:
+> `Invoke-RestMethod -Uri "http://localhost:8000/predict/kronos/AAPL?timeframe=1d"`
+
 
 **Kronos Pattern Detection**
 ```bash
