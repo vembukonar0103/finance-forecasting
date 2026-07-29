@@ -1,0 +1,44 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+fin-env/
+venv/
+env/
+.env
+
+# MacOS
+.DS_Store
+
+# Data, databases, and generated parquets
+data/raw/
+data/processed/
+data/experiments.db
+data/features_wide.parquet
+feature_store/finance_features.db
+feature_repo/data/
+
+# Ignored predictions but keep benchmark_results.csv
+data/predictions/*.csv
+data/predictions/*.parquet
+data/predictions/*.json
+!data/predictions/benchmark_results.csv
+
+# Reports - ignore binaries but keep md/html
+reports/*.docx
+reports/*.pdf
+
+# Plots - ignore all but keep 2 specific benchmark plots if you add them manually (git add -f)
+plots/*.png
+plots/*.jpg
+
+# External repositories
+models/kronos_repo/
+
+# Scratch files
+scratch_*.py
+
+# Caches
+.pytest_cache/
