@@ -27,6 +27,16 @@ This engine identifies trading patterns, generates multi-horizon probability for
 
 ---
 
+## 🏆 Key Benchmark Findings
+
+A core component of this project was a statistically-aware, 3-run benchmark comparison across 5 diverse assets evaluating Google's TimesFM against Kronos. The headline finding:
+
+> **Kronos underperforms TimesFM on raw statistical forecast accuracy, but produces a positive backtest Sharpe ratio while TimesFM doesn't.**
+
+This highlights the critical difference between raw loss metrics (MAE/MSE) and actionable trading utility, driving the design of our Composite Signal Engine which blends TimesFM's structural multi-horizon trajectory with Kronos's tactical pattern confirmation.
+
+---
+
 ## Tech Stack
 
 - Python
@@ -150,8 +160,8 @@ git clone https://github.com/shiyu-coder/Kronos.git models/kronos_repo
 finance-forecasting/
 ├── api/                   # FastAPI routes, schemas, and WebSocket
 ├── data/                  # Raw/processed data and benchmark summaries
-├── feature_repo/          # Feast entity and feature view definitions
-├── feature_store/         # SQLite offline backing store
+├── feature_repo/          # Feast config & registry (feature_store.yaml and view definitions)
+├── feature_store/         # SQLite database backing the offline store data
 ├── features/              # TA-Lib indicators and Feast wrapping logic
 ├── models/                # TimesFM, Kronos adapters and Ensembles
 │   └── kronos_repo/       # Cloned external Kronos dependency (Ignored in Git)
