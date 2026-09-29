@@ -1,8 +1,9 @@
-project: finance_feature_store
+project: finance_forecasting
 registry: data/registry.pb
 provider: local
 online_store:
   type: redis
-  connection_string: "localhost:6379"
+  connection_string: 127.0.0.1:6379
 offline_store:
   type: file
+entity_key_serialization_version: 3

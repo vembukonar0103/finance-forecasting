@@ -11,7 +11,7 @@ class PredictionResponse(BaseModel):
     expected_return_pct: float
     confidence_score: float
     prediction_interval: Dict[str, float]
-    technical_indicators: Dict[str, float]
+    technical_indicators: Dict[str, Optional[float]]
     signal: str
     reasoning: List[str]
     
@@ -53,6 +53,8 @@ class TimesFMHorizonQuantiles(BaseModel):
     probability_plus_5_pct: float
     inference_ms: float
     cache_hit: bool
+    fallback: bool = False
+    provider: str = "timesfm"
 
 class TimesFMFanChartResponse(BaseModel):
     ticker: str

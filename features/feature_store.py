@@ -34,6 +34,10 @@ def store_features(ticker: str, df_features: pd.DataFrame):
     
     # Prepare wide data to melt
     df = df_features.copy()
+    for col_to_drop in ['event_timestamp', 'created_timestamp', 'ticker']:
+        if col_to_drop in df.columns:
+            df = df.drop(columns=[col_to_drop])
+
     if 'timestamp' in df.columns:
         df = df.rename(columns={'timestamp': 'date'})
     elif 'timestamps' in df.columns:
@@ -77,13 +81,16 @@ def get_latest_features(ticker: str) -> dict:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Find the latest date for the ticker
-    cursor.execute("SELECT MAX(date) FROM features_long WHERE ticker = ?", (ticker,))
+    # Find the latest date for the ticker where features are populated
+    cursor.execute("SELECT MAX(date) FROM features_long WHERE ticker = ? AND feature_value IS NOT NULL", (ticker,))
     latest_date_row = cursor.fetchone()
     
     if not latest_date_row or latest_date_row[0] is None:
-        conn.close()
-        return {}
+        cursor.execute("SELECT MAX(date) FROM features_long WHERE ticker = ?", (ticker,))
+        latest_date_row = cursor.fetchone()
+        if not latest_date_row or latest_date_row[0] is None:
+            conn.close()
+            return {}
         
     latest_date = latest_date_row[0]
     

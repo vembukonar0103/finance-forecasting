@@ -20,7 +20,7 @@ from models.device import get_device
 
 
 class KronosForecast:
-    def __init__(self, model_name="NeoQuasar/Kronos-base", tokenizer_name="NeoQuasar/Kronos-Tokenizer-base"):
+    def __init__(self, model_name="NeoQuasar/Kronos-base", tokenizer_name="NeoQuasar/Kronos-Tokenizer-base", quantize_int8: bool = False):
         self.device = get_device()
         print(f"Initializing Kronos ({model_name}) on device: {self.device}")
 
@@ -35,17 +35,58 @@ class KronosForecast:
             device=self.device,
             max_context=512
         )
+        self.is_quantized = False
+        self.last_attention_heatmap = None
 
-    def predict(self, df: pd.DataFrame, target_col='close', lookback=400, horizon=30, freq='B') -> pd.DataFrame:
+        if quantize_int8 or os.getenv("KRONOS_QUANTIZE_INT8", "0") == "1":
+            self.quantize()
+
+    def quantize(self):
+        """
+        Applies PyTorch Dynamic INT8 Quantization (Linear layers) to Kronos for CPU inference speedup.
+        """
+        if "cpu" in str(self.device).lower():
+            try:
+                print("Applying dynamic INT8 quantization to Kronos model on CPU...")
+                self.model = torch.quantization.quantize_dynamic(
+                    self.model, {torch.nn.Linear}, dtype=torch.qint8
+                )
+                self.predictor.model = self.model
+                self.is_quantized = True
+                print("Kronos dynamic INT8 quantization complete.")
+            except Exception as e:
+                print(f"[Warning] Kronos INT8 quantization failed: {e}")
+        else:
+            print(f"Skipping INT8 quantization on device {self.device} (optimized for CPU).")
+
+    def predict(
+        self, 
+        df: pd.DataFrame, 
+        target_col='close', 
+        lookback=400, 
+        horizon=30, 
+        freq='B',
+        extract_attention: bool = True
+    ) -> pd.DataFrame:
         """
         freq : pandas offset string for future date generation.
                Use 'B' (business days) for equities, 'D' (calendar days) for BTC-USD and
                other assets that trade every day including weekends.
+        extract_attention : If True, extracts multihead attention heatmaps from transformer layers.
         """
         df_sorted = df.sort_values('timestamps').copy()
 
         if target_col not in df_sorted.columns:
             raise ValueError(f"Target column '{target_col}' not found in input DataFrame.")
+
+        # Clean any NaN values in price / volume columns
+        price_cols = [c for c in ['open', 'high', 'low', 'close'] if c in df_sorted.columns]
+        if price_cols:
+            df_sorted = df_sorted.dropna(subset=price_cols)
+        if 'volume' in df_sorted.columns:
+            df_sorted['volume'] = df_sorted['volume'].fillna(0.0)
+            if 'amount' in df_sorted.columns:
+                df_sorted['amount'] = df_sorted['close'] * df_sorted['volume']
 
         # .copy() here fixes the SettingWithCopyWarning
         df_lookback = df_sorted.tail(lookback).copy()
@@ -63,6 +104,12 @@ class KronosForecast:
 
         x_timestamp = df_lookback['timestamps'].reset_index(drop=True)
 
+        # Enable attention saving if requested
+        if extract_attention and hasattr(self.model, 'transformer') and len(self.model.transformer) > 0:
+            for idx in [0, -1]:
+                if hasattr(self.model.transformer[idx], 'self_attn'):
+                    self.model.transformer[idx].self_attn.save_attention = True
+
         pred_df = self.predictor.predict(
             df=df_lookback,
             x_timestamp=x_timestamp,
@@ -70,7 +117,42 @@ class KronosForecast:
             pred_len=horizon
         )
 
+        # Extract attention weights after inference
+        if extract_attention and hasattr(self.model, 'transformer') and len(self.model.transformer) > 0:
+            self.last_attention_heatmap = self._extract_attention_map(lookback_steps=min(30, lookback))
+            # Reset flags
+            for idx in [0, -1]:
+                if hasattr(self.model.transformer[idx], 'self_attn'):
+                    self.model.transformer[idx].self_attn.save_attention = False
+
         return pred_df
+
+    def _extract_attention_map(self, lookback_steps: int = 30) -> dict:
+        """
+        Extracts and formats attention weights into a lightweight heatmap dictionary.
+        """
+        heatmap_dict = {
+            "layers": {},
+            "lookback_steps": lookback_steps,
+            "status": "extracted"
+        }
+        try:
+            for l_idx, l_name in [(0, "layer_0"), (-1, "layer_last")]:
+                layer = self.model.transformer[l_idx]
+                if hasattr(layer, 'self_attn') and getattr(layer.self_attn, 'last_attn_weights', None) is not None:
+                    raw_w = layer.self_attn.last_attn_weights
+                    # raw_w shape: [batch, n_heads, seq, seq]
+                    if raw_w.dim() == 4:
+                        # Average across heads and take batch 0
+                        avg_w = raw_w.mean(dim=1)[0].numpy()
+                        # Slice the last lookback_steps x lookback_steps
+                        sub_matrix = avg_w[-lookback_steps:, -lookback_steps:]
+                        heatmap_dict["layers"][l_name] = np.round(sub_matrix, 4).tolist()
+            if not heatmap_dict["layers"]:
+                heatmap_dict["status"] = "unavailable"
+        except Exception as e:
+            heatmap_dict["status"] = f"extraction_error: {str(e)}"
+        return heatmap_dict
 
     def predict_timed(
         self,

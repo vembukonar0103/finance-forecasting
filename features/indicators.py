@@ -5,14 +5,20 @@ import talib
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Computes 21 technical indicators using TA-Lib library on the input DataFrame.
+    Computes 25 technical indicators using TA-Lib library and volatility regime features
+    on the input DataFrame.
     The input DataFrame should contain 'open', 'high', 'low', 'close', and 'volume' columns.
+    
     Returns a DataFrame with columns:
-      - 'timestamp'
-      - 21 technical indicator columns:
+      - 'timestamp' (YYYY-MM-DD string)
+      - 'event_timestamp' (datetime64[ns, UTC] for Feast point-in-time correctness)
+      - 'created_timestamp' (datetime64[ns, UTC])
+      - 25 technical indicator columns:
         sma10, sma20, sma50, sma200, ema10, ema20, ema50, ema200,
         rsi, macd, macd_sig, macd_hist, bb_upper, bb_middle, bb_lower,
-        atr, adx, cci, slowk, slowd, willr
+        atr, adx, cci, slowk, slowd, willr, obv, adosc, volume_sma20, relative_volume
+      - Custom volatility regime features:
+        bb_width, atr_percentile_20d, rsi_slope_5d
     """
     # Normalize columns to lowercase to handle different cases
     df = df.copy()
@@ -47,7 +53,17 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     v = df['volume'].astype(float).values
     
     feats = pd.DataFrame()
-    feats['timestamp'] = df[ts_col].astype(str)
+    
+    # Datetime handling for Feast point-in-time correctness
+    dt_series = pd.to_datetime(df[ts_col])
+    if dt_series.dt.tz is None:
+        dt_utc = dt_series.dt.tz_localize('UTC')
+    else:
+        dt_utc = dt_series.dt.tz_convert('UTC')
+        
+    feats['timestamp'] = dt_utc.dt.strftime('%Y-%m-%d')
+    feats['event_timestamp'] = dt_utc
+    feats['created_timestamp'] = pd.Timestamp.now(tz='UTC')
     
     # 1-4. Simple Moving Averages
     feats['sma10'] = talib.SMA(c, timeperiod=10)
@@ -104,5 +120,18 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # Handle division by zero or NaN safely
     feats['relative_volume'] = np.where(feats['volume_sma20'] > 0, v / feats['volume_sma20'], 1.0)
     
+    # Custom Volatility Regime Features
+    # 1. Bollinger Band Width
+    bb_mid = np.where(feats['bb_middle'] > 0, feats['bb_middle'], 1e-5)
+    feats['bb_width'] = (feats['bb_upper'] - feats['bb_lower']) / bb_mid
+    
+    # 2. 20-day rolling ATR percentile rank
+    feats['atr_percentile_20d'] = feats['atr'].rolling(window=20, min_periods=5).apply(
+        lambda s: pd.Series(s).rank(pct=True).iloc[-1] if len(s) > 0 else 0.5,
+        raw=False
+    ).fillna(0.5)
+    
+    # 3. 5-day RSI slope
+    feats['rsi_slope_5d'] = ((feats['rsi'] - feats['rsi'].shift(5)) / 5.0).fillna(0.0)
+    
     return feats
-

@@ -1,3 +1,4 @@
+import os
 import time
 import tracemalloc
 import numpy as np
@@ -7,9 +8,11 @@ import timesfm
 from models.device import get_device
 
 class TimesFMForecast:
-    def __init__(self):
+    def __init__(self, max_context: int = None, fp16: bool = False):
         self.device = torch.device(get_device())
-        print(f"Initializing TimesFM 2.5 Torch on device: {self.device}")
+        self.default_max_context = int(max_context or os.getenv("TIMESFM_MAX_CONTEXT", "4096"))
+        self.fp16 = fp16 or (os.getenv("TIMESFM_FP16", "0") == "1")
+        print(f"Initializing TimesFM 2.5 Torch on device: {self.device} (default_max_context={self.default_max_context}, fp16={self.fp16})")
         
         # Load timesfm model from pretrained
         self.model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
@@ -22,12 +25,27 @@ class TimesFMForecast:
         self.model.model.device = self.device
         self.model.device = self.device
 
+        # Model Quantization: FP16 on CUDA
+        if self.fp16 and str(self.device).startswith('cuda'):
+            try:
+                self.model.model = self.model.model.half()
+                print("Applied FP16 half-precision to TimesFM model.")
+            except Exception as e:
+                print(f"[Warning] Failed applying FP16 to TimesFM: {e}")
         
         self._compiled_horizon = None
+        self._compiled_context = None
 
-    def predict(self, df: pd.DataFrame, target_col='close', horizon=30, freq='B') -> tuple[pd.DataFrame, float]:
+    def predict(
+        self, 
+        df: pd.DataFrame, 
+        target_col='close', 
+        horizon=30, 
+        freq='B',
+        max_context: int = None
+    ) -> tuple[pd.DataFrame, float]:
         """
-        Runs forecast using TimesFM 2.5.
+        Runs forecast using TimesFM 2.5 with configurable context window (e.g., 512, 4096, 16384).
         df should have columns: 'timestamps' (dates) and target_col.
         Returns:
           - A DataFrame of forecasts containing columns:
@@ -35,6 +53,8 @@ class TimesFMForecast:
             indexed by future business day/calendar day timestamps.
           - The probability P(>= +5% in 30 days) at day 30.
         """
+        effective_context = int(max_context or self.default_max_context)
+
         # Ensure input data is clean and sorted
         df_sorted = df.sort_values('timestamps').copy()
         
@@ -42,19 +62,26 @@ class TimesFMForecast:
             raise ValueError(f"Target column '{target_col}' not found in input DataFrame.")
             
         close_prices = df_sorted[target_col].astype(np.float32).values
+        # Slice last effective_context rows if longer
+        if len(close_prices) > effective_context:
+            close_prices = close_prices[-effective_context:]
+
         last_timestamp = pd.to_datetime(df_sorted['timestamps'].iloc[-1])
         
-        # Compile model dynamically if horizon changes
-        if self._compiled_horizon != horizon:
-            print(f"Compiling TimesFM model for horizon={horizon}...")
+        # Compile model dynamically if horizon or context changes
+        if self._compiled_horizon != horizon or self._compiled_context != effective_context:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print(f"Compiling TimesFM model for horizon={horizon}, max_context={effective_context}...")
             config = timesfm.ForecastConfig(
-                max_context=512,
+                max_context=effective_context,
                 max_horizon=horizon,
                 normalize_inputs=True,
                 fix_quantile_crossing=True,
             )
             self.model.compile(config)
             self._compiled_horizon = horizon
+            self._compiled_context = effective_context
             
         # Run forecasting
         # Inputs must be a list of numpy arrays
@@ -100,7 +127,8 @@ class TimesFMForecast:
         df: pd.DataFrame,
         target_col: str = 'close',
         horizon: int = 30,
-        freq: str = 'B'
+        freq: str = 'B',
+        max_context: int = None
     ) -> tuple:
         """
         Wraps predict() and additionally measures:
@@ -120,7 +148,9 @@ class TimesFMForecast:
             tracemalloc.start()
 
         t_start = time.perf_counter()
-        pred_df, prob_plus_5 = self.predict(df, target_col=target_col, horizon=horizon, freq=freq)
+        pred_df, prob_plus_5 = self.predict(
+            df, target_col=target_col, horizon=horizon, freq=freq, max_context=max_context
+        )
         t_end = time.perf_counter()
 
         if use_gpu:

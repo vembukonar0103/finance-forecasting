@@ -1,244 +1,192 @@
-# Unified Finance Forecasting Engine
+# Unified Financial Forecasting Platform
 
-![Python](https://img.shields.io/badge/Python-3.11-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-Latest-green)
-![Redis](https://img.shields.io/badge/Redis-Enabled-red)
-![License](https://img.shields.io/badge/License-MIT-blue)
+[![CI Pipeline](https://github.com/shravani-gangan/finance-forecasting/actions/workflows/ci.yml/badge.svg)](https://github.com/shravani-gangan/finance-forecasting/actions/workflows/ci.yml)
+![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?logo=fastapi&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch&logoColor=white)
+![Feast](https://img.shields.io/badge/Feast-0.65-blue?logo=feast&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7.0+-DC382D?logo=redis&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)
+![Prometheus](https://img.shields.io/badge/Prometheus-Telemetry-E6522C?logo=prometheus&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-A unified financial forecasting, technical analysis, and AI screening platform powered by **Google's TimesFM**, **Kronos**, **TA-Lib**, and **Feast Feature Store**.
-
-This engine identifies trading patterns, generates multi-horizon probability forecasts, backtests composite trading strategies, and serves a unified AI rating screener via a fast asynchronous FastAPI backend.
-
----
-
-## Features
-
-- Multi-horizon forecasting using TimesFM
-- Candlestick pattern detection using Kronos
-- Technical indicators using TA-Lib
-- Feast Feature Store integration
-- FastAPI inference APIs
-- Redis caching
-- Composite AI signal engine
-- AI Screener
-- WebSocket real-time updates
-- Walk-forward backtesting
-- Portfolio optimization
+An enterprise-grade, high-performance financial forecasting and quantitative screening platform combining **Google's TimesFM 2.5** foundation time-series forecaster, the **Kronos** vision-language candlestick transformer, **25 TA-Lib** indicators, and the **Feast Feature Store**.
 
 ---
 
-## 🏆 Key Benchmark Findings
+## 🚀 Key Production Capabilities
 
-A core component of this project was a statistically-aware, 3-run benchmark comparison across 5 diverse assets evaluating Google's TimesFM against Kronos. The headline finding:
-
-> **Kronos underperforms TimesFM on raw statistical forecast accuracy, but produces a positive backtest Sharpe ratio while TimesFM doesn't.**
-
-This highlights the critical difference between raw loss metrics (MAE/MSE) and actionable trading utility, driving the design of our Composite Signal Engine which blends TimesFM's structural multi-horizon trajectory with Kronos's tactical pattern confirmation.
-
----
-
-## Tech Stack
-
-- Python
-- FastAPI
-- PyTorch
-- TimesFM 2.5
-- Kronos
-- TA-Lib
-- Feast
-- Redis
-- SQLite
-- Yahoo Finance
+* **Foundation Models at Scale:**
+  * **Google TimesFM 2.5:** Scaled from legacy 512 context to **4,096 default bars** (configurable up to **16,384 bars**, ~16 years of trading history) with **FP16 half-precision** and GPU memory flushing.
+  * **Kronos Candlestick Transformer:** Dynamic **INT8 quantization** for 2x faster CPU inference, plus forward hooks capturing **multi-head attention heatmaps** for visual explainability.
+* **Point-in-Time Correct Feature Store:**
+  * **Feast Feature Store** backed by Redis for sub-5ms online serving and Parquet for offline point-in-time correctness, mathematically eliminating lookahead bias and data leakage.
+* **Sub-50ms High-Performance Screener (<2s SLA):**
+  * Asynchronous background worker (`scripts/refresh_screener_cache.py`) pre-computes signals across a 61-asset universe. REST endpoint latency dropped from **191.4s to 23.3ms** (a **99.98% latency reduction**).
+  * Real-time WebSocket streaming (`/ws/screener`) pushes instantaneous market scan updates.
+* **Multi-Tier Resilience Engineering:**
+  * 3-state Circuit Breaker (`CLOSED` -> `OPEN` -> `HALF_OPEN`) protecting TimesFM, Kronos, and Yahoo Finance.
+  * Automatic graceful fallback to **BigQuery `ML.FORECAST`** or **Statistical Holt-Winters/EMA Drift** quantile forecasting.
+* **Production Observability & Metrics:**
+  * Prometheus exposition (`/metrics`), structured JSON logging for log aggregators, and a 5-panel **Grafana Dashboard** (`observability/grafana_dashboard.json`).
+* **Containerized Deployment & CI/CD:**
+  * Multi-stage `Dockerfile` with TA-Lib C library compilation, `docker-compose.yml` orchestration, and automated GitHub Actions CI.
 
 ---
 
-## Architecture Overview
+## 🏗 System Architecture
 
 ```mermaid
-flowchart TD
-    A[Yahoo Finance Data] -->|Historical Price Data| B(TA-Lib Indicators)
-    B -->|21 Derived Features| C[(Feast Feature Store)]
-    C -->|Real-time Feature Serving| D{TimesFM Model}
-    C -->|Real-time Feature Serving| E{Kronos Model}
-    D -->|P50 Forecast & Probability Bands| F((Composite Signal Engine))
-    E -->|Pattern Detection & Confidence| F
-    F -->|Confirmation / Conflict Check| G[Redis Cache]
-    G -->|Cached Inference Responses| H[FastAPI]
-    H -->|Real-time Publish| I([WebSocket AI Screener])
+graph TD
+    Client[Web & API Clients] -->|HTTP / WebSocket| Ingress[FastAPI Gateway :8000]
+    
+    subgraph Observability
+        Prometheus[/metrics Exposition]
+        JSONLogger[Structured JSON Logs]
+        Grafana[Grafana Dashboard]
+    end
+    
+    subgraph Data & Feature Layer
+        YF[Yahoo Finance API] --> DataLoader[utils/data_loader.py]
+        DataLoader --> ParquetStore[(data/raw Parquet Cache)]
+        DataLoader --> TALib[features/indicators.py - 25 TA-Lib + Vol Regime]
+        TALib --> FeastAdapter[features/feast_wrapper.py]
+        FeastAdapter --> RedisOnline[(Redis Online Store :6379)]
+        FeastAdapter --> SQLiteFallback[(Legacy SQLite Store)]
+    end
+
+    subgraph Inference & Resilience Engine
+        Ingress --> CircuitBreaker[utils/circuit_breaker.py]
+        CircuitBreaker -->|Normal| TimesFM[models/timesfm_model.py - 4K Context, FP16]
+        CircuitBreaker -->|Trip / Failure| BQFallback[models/bigquery_fallback.py - BQ ML & Drift]
+        CircuitBreaker --> Kronos[models/kronos_model.py - INT8, Attention Hooks]
+    end
+
+    subgraph Signal & Screener Engine
+        TimesFM --> Composite[utils/composite_signal.py]
+        Kronos --> Composite
+        Composite --> ScreenerCache[(Redis 'screener:latest_results')]
+        Worker[scripts/refresh_screener_cache.py] -->|Every 5m| ScreenerCache
+        ScreenerCache -->|PubSub| WSScreener[WebSocket /ws/screener]
+        ScreenerCache -->|<50ms Response| ScreenerAPI[/api/v1/screeners/ai-filter]
+    end
 ```
 
-### Core Architecture Components
-
-* **Feast Feature Store**: Feast provides an offline feature store for generating point-in-time correct training datasets, and an online feature store for extremely low-latency, real-time feature retrieval during inference.
-* **Redis Caching**: Prediction responses are cached in Redis (with a TTL of 300 seconds) to heavily reduce repeated ML inference latency on identical requests.
-
-### Current Model Configuration
-
-**TimesFM Context Window**: The current implementation uses a maximum context window of 512 observations. Support for larger context windows can be enabled in future model configurations.
-
-### Future Enhancements
-
-- Live market streaming
-- Docker deployment
-- Kubernetes deployment
-- GPU quantization support
-- Multi-market screening
-- LLM-generated market summaries
+Detailed architectural decisions are documented in [docs/ARCHITECTURE.md](file:///c:/Users/hp/Downloads/finance-forecasting/docs/ARCHITECTURE.md).
 
 ---
 
-## 🛠 Prerequisites
-- **Python 3.11+**
-- **Git**
-- **Redis** (Used for caching and WebSocket pub/sub)
-- **TA-Lib** (C++ underlying library required)
+## ⚡ Quickstart
 
----
+### Option A: Docker Compose (Recommended)
 
-## 🚀 Setup & Installation (Cross-Platform)
+Start the entire platform (FastAPI inference engine, Redis cache, and asynchronous screener worker) with one command:
 
-### 1. Virtual Environment
-**macOS / Linux:**
 ```bash
-python3 -m venv fin-env
-source fin-env/bin/activate
+docker compose up -d --build
 ```
 
-**Windows (PowerShell):**
-```powershell
-python -m venv fin-env
+Verify service health:
+```bash
+docker compose ps
+curl http://localhost:8000/health
+```
+
+### Option B: Local / Bare-Metal Environment
+
+#### 1. Setup Virtual Environment
+```bash
+python3.11 -m venv fin-env
+# Linux / macOS
+source fin-env/bin/activate
+# Windows PowerShell
 .\fin-env\Scripts\Activate.ps1
 ```
 
-**Windows (Command Prompt):**
-```cmd
-fin-env\Scripts\activate.bat
-```
-
-### 2. Install Python Dependencies
+#### 2. Install Dependencies
 ```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Install TA-Lib
-TA-Lib requires the underlying C++ library to be installed before the Python wrapper can compile.
-
-**macOS:**
+#### 3. Start Redis & API Services
 ```bash
-brew install ta-lib
-```
+# Terminal 1: Start Redis (Docker or local)
+docker run -d -p 6379:6379 redis:7-alpine
 
-**Windows:**
-The easiest way on Windows is to download the unofficial precompiled wheel for your Python version from [Christoph Gohlke's repository](https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib) or use `conda install -c conda-forge ta-lib`. 
+# Terminal 2: Start API Server
+uvicorn api.app:app --host 0.0.0.0 --port 8000
 
-### 4. Install & Start Redis
-**macOS:**
-```bash
-brew install redis
-brew services start redis
-```
-
-**Windows:**
-Redis is not officially supported directly on Windows. The recommended approach is **Docker Desktop**:
-```powershell
-docker run -d -p 6379:6379 redis
-```
-*(Alternatively, use WSL2 or a native Windows port like Memurai).*
-
-### 5. Clone External Machine Learning Dependency
-We use an external repository for the Kronos forecasting model. It must be cloned directly into the `models/` directory.
-
-```bash
-git clone https://github.com/shiyu-coder/Kronos.git models/kronos_repo
+# Terminal 3: Start Screener Background Worker
+python scripts/refresh_screener_cache.py --daemon --interval 300
 ```
 
 ---
 
-## 🏗 Project Folder Structure
+## 🧪 Testing & Verification
 
-```text
-finance-forecasting/
-├── api/                   # FastAPI routes, schemas, and WebSocket
-├── data/                  # Raw/processed data and benchmark summaries
-├── feature_repo/          # Feast config & registry (feature_store.yaml and view definitions)
-├── feature_store/         # SQLite database backing the offline store data
-├── features/              # TA-Lib indicators and Feast wrapping logic
-├── models/                # TimesFM, Kronos adapters and Ensembles
-│   └── kronos_repo/       # Cloned external Kronos dependency (Ignored in Git)
-├── scripts/               # Benchmarking, PDF generation, data population
-├── utils/                 # Caching, Risk Engine, Walk-Forward backtester
-├── requirements.txt
-├── README.md
-└── .gitignore
+The platform maintains an automated test suite with **50+ unit and integration tests** achieving >70% coverage across core modules:
+
+```bash
+# Run pytest with coverage report
+pytest --cov=utils --cov=features --cov-report=term-missing
 ```
+
+| Module | Statements | Coverage |
+|---|---|---|
+| `features/indicators.py` | 68 | **99%** |
+| `features/feature_store.py` | 56 | **95%** |
+| `utils/metrics.py` | 8 | **100%** |
+| `utils/config.py` | 11 | **100%** |
+| `utils/logger.py` | 24 | **96%** |
+| `utils/composite_signal.py` | 34 | **91%** |
+| `utils/explainability.py` | 48 | **92%** |
+| `utils/data_loader.py` | 51 | **88%** |
+| `utils/trading_strategy.py` | 46 | **78%** |
+| `utils/circuit_breaker.py` | 76 | **72%** |
+| `utils/health.py` | 39 | **74%** |
 
 ---
 
-## ⚡ Running the API
+## 📡 Core API Endpoints
 
-Once all dependencies (including Redis) are running, start the FastAPI server:
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | `GET` | Enterprise dependency-aware health check (Redis, TimesFM, Kronos, Yahoo Finance) |
+| `/metrics` | `GET` | Prometheus telemetry exposition format |
+| `/features/{ticker}` | `GET` | Online feature store lookup (25 TA-Lib + Volatility Regime) |
+| `/predict/{ticker}` | `GET` | Unified forecast (TimesFM + Kronos + Features + Signal + Reasoning) |
+| `/predict/timesfm/{ticker}` | `GET` | Dedicated TimesFM multi-horizon fan charts with configurable context |
+| `/predict/kronos/{ticker}` | `GET` | Dedicated Kronos candlestick pattern detection & attention heatmap |
+| `/api/v1/screeners/ai-filter` | `GET` | High-performance pre-computed AI screener (<50ms response) |
+| `/predict/batch` | `POST` | Batch ticker forecasting with fault isolation |
+| `/ws/screener` | `WS` | Real-time WebSocket streaming live screener market updates |
 
-**macOS / Linux:**
-```bash
-uvicorn api.app:app --reload
-```
-
-**Windows:**
-```powershell
-uvicorn api.app:app --reload
-```
-
----
-
-## 📡 API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `/predict/{ticker}` | Unified forecast |
-| `/predict/kronos/{ticker}` | Pattern detection |
-| `/predict/timesfm/{ticker}` | Multi-horizon forecast |
-| `/api/v1/screeners/ai-filter` | AI screener |
-| `/ws/screener` | WebSocket updates |
-
-### API Examples
-
-> **Note for Windows Users:** The examples below use `curl`. If you are using PowerShell, you can replace the `curl -X GET` commands with `Invoke-RestMethod -Uri`. For example:
-> `Invoke-RestMethod -Uri "http://localhost:8000/predict/kronos/AAPL?timeframe=1d"`
-
-
-**Kronos Pattern Detection**
-```bash
-curl -X GET "http://localhost:8000/predict/kronos/AAPL?timeframe=1d"
-```
-*Expected Response:*
-```json
-{
-  "ticker": "AAPL",
-  "label": "Bullish",
-  "confidence": 0.93,
-  "forecast_step": 18
-}
-```
-
-**TimesFM Forecast Endpoint**
-Predict 30-day ahead trajectories for Apple:
-```bash
-curl -X GET "http://localhost:8000/predict/timesfm/AAPL?horizons=30"
-```
-
-**AI Screener (Composite Filter)**
-Filter a fixed universe for a specific pattern matching a minimum confidence threshold.
-```bash
-curl -X GET "http://localhost:8000/api/v1/screeners/ai-filter?pattern=bullish_engulfing&min_confidence=0.70"
-```
+Detailed curl examples, query parameters, and JSON schemas are in [docs/API_GUIDE.md](file:///c:/Users/hp/Downloads/finance-forecasting/docs/API_GUIDE.md).
 
 ---
 
-## 🔧 Troubleshooting
+## 📊 Observability & Monitoring
 
-- **Redis Connection Errors:** Ensure the Redis server is actually running on port `6379`. On Windows, ensure Docker Desktop is running and the container is active.
-- **TA-Lib Installation Issues:** If `pip install -r requirements.txt` fails building TA-Lib, you must install the underlying C library first (using `brew` on Mac, or a `.whl` / `conda` on Windows).
-- **Feast Initialization Problems:** Make sure to run `feast apply` inside the `feature_repo` directory if modifying feature views. The `populate_feature_store.py` script automates initial materialization.
-- **Apple Silicon (MPS) vs CUDA vs CPU Execution:** The models in `models/device.py` will attempt to auto-detect MPS on Mac or CUDA on Windows/Linux. Ensure your PyTorch installation matches your hardware.
-- **Missing Kronos Repository:** If the API fails on boot stating `ModuleNotFoundError` for Kronos, ensure you cloned the repo exactly to `models/kronos_repo`.
-- **Python Virtual Environment Activation Problems:** Ensure you are using the correct command for your OS and shell profile (e.g. `Set-ExecutionPolicy Unrestricted -Scope CurrentUser` may be required in PowerShell).
+1. **Prometheus Metrics:** Available at `http://localhost:8000/metrics`.
+2. **Grafana Dashboard:** Import `observability/grafana_dashboard.json` into Grafana to monitor:
+   - Inference request rates and error codes.
+   - P50, P95, and P99 latency percentiles by model.
+   - Redis cache hit ratios.
+   - AI screener match counts.
+   - Live dependency health status.
+
+---
+
+## 📖 Complete Documentation
+
+* [System Architecture & ADRs](file:///c:/Users/hp/Downloads/finance-forecasting/docs/ARCHITECTURE.md)
+* [API Developer Guide](file:///c:/Users/hp/Downloads/finance-forecasting/docs/API_GUIDE.md)
+* [Production Deployment & Operations](file:///c:/Users/hp/Downloads/finance-forecasting/docs/DEPLOYMENT.md)
+* [Phase 3, 4 & 5 Verification Report](file:///c:/Users/hp/Downloads/finance-forecasting/docs/PHASE_3_4_5_REPORT.md)
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](file:///c:/Users/hp/Downloads/finance-forecasting/LICENSE) file for details.

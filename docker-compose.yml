@@ -1,0 +1,84 @@
+services:
+  # ----------------------------------------------------------------------------
+  # Redis Online Store & Distributed Caching Layer
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: finance_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - finance-net
+
+  # ----------------------------------------------------------------------------
+  # Unified Finance Forecasting FastAPI Inference Service
+  # ----------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finance_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - TIMESFM_MAX_CONTEXT=4096
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - finance-net
+
+  # ----------------------------------------------------------------------------
+  # Screener Background Worker: Pre-computes ratings to guarantee <50ms SLA
+  # ----------------------------------------------------------------------------
+  screener-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finance_screener_worker
+    restart: unless-stopped
+    command: ["python", "scripts/refresh_screener_cache.py", "--daemon", "--interval", "300"]
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - finance-net
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  finance-net:
+    driver: bridge

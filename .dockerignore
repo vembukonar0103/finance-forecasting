@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Python virtual environment and caches
+fin-env/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pytest and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local database and raw cache files
+*.db
+*.sqlite
+data/raw/*.parquet
+feature_repo/data/*.parquet
+
+# Temporary IDE and system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

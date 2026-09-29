@@ -1,0 +1,225 @@
+{
+  "timestamp": 1788769614.117015,
+  "target_url": "http://127.0.0.1:8000/api/v1/screeners/ai-filter?pattern=bullish_engulfing&min_confidence=0.75",
+  "concurrency_users": 10,
+  "total_requests": 20,
+  "successful_requests": 20,
+  "failed_requests": 0,
+  "error_rate_pct": 0.0,
+  "wall_duration_seconds": 0.75,
+  "throughput_req_per_sec": 26.619,
+  "latency_stats_ms": {
+    "min": 252.86,
+    "max": 412.14,
+    "mean": 335.67,
+    "p50": 330.29,
+    "p90": 388.83,
+    "p95": 400.29,
+    "p99": 409.77
+  },
+  "sla_target_ms": 2000.0,
+  "sla_passed": true,
+  "ac_baseline_exceeds_5s_proven": false,
+  "requests_detail": [
+    {
+      "user_id": 3,
+      "request_id": 3,
+      "status_code": 200,
+      "elapsed_ms": 252.86,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 2,
+      "request_id": 2,
+      "status_code": 200,
+      "elapsed_ms": 287.6,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 1,
+      "request_id": 1,
+      "status_code": 200,
+      "elapsed_ms": 309.86,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 4,
+      "request_id": 4,
+      "status_code": 200,
+      "elapsed_ms": 332.8,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 5,
+      "request_id": 5,
+      "status_code": 200,
+      "elapsed_ms": 339.66,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 7,
+      "request_id": 7,
+      "status_code": 200,
+      "elapsed_ms": 334.59,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 6,
+      "request_id": 6,
+      "status_code": 200,
+      "elapsed_ms": 371.43,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 8,
+      "request_id": 8,
+      "status_code": 200,
+      "elapsed_ms": 387.63,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 10,
+      "request_id": 10,
+      "status_code": 200,
+      "elapsed_ms": 399.67,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 9,
+      "request_id": 9,
+      "status_code": 200,
+      "elapsed_ms": 412.14,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 1,
+      "request_id": 11,
+      "status_code": 200,
+      "elapsed_ms": 327.78,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 3,
+      "request_id": 13,
+      "status_code": 200,
+      "elapsed_ms": 291.4,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 2,
+      "request_id": 12,
+      "status_code": 200,
+      "elapsed_ms": 319.17,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 4,
+      "request_id": 14,
+      "status_code": 200,
+      "elapsed_ms": 350.9,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 5,
+      "request_id": 15,
+      "status_code": 200,
+      "elapsed_ms": 348.94,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 7,
+      "request_id": 17,
+      "status_code": 200,
+      "elapsed_ms": 319.13,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 8,
+      "request_id": 18,
+      "status_code": 200,
+      "elapsed_ms": 320.34,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 6,
+      "request_id": 16,
+      "status_code": 200,
+      "elapsed_ms": 381.95,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 9,
+      "request_id": 19,
+      "status_code": 200,
+      "elapsed_ms": 315.41,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    },
+    {
+      "user_id": 10,
+      "request_id": 20,
+      "status_code": 200,
+      "elapsed_ms": 310.12,
+      "success": true,
+      "total_matched": 3,
+      "response_size_bytes": 1584,
+      "error": null
+    }
+  ]
+}

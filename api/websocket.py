@@ -5,6 +5,7 @@ WebSocket endpoints for pushing real-time updates to connected clients.
 Listens to Redis pub/sub channels.
 """
 
+import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import redis.asyncio as aioredis
 import asyncio
@@ -16,8 +17,10 @@ router = APIRouter()
 async def websocket_screener(websocket: WebSocket):
     await websocket.accept()
     
-    # Connect to Redis asynchronously
-    r = await aioredis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+    # Connect to Redis asynchronously (127.0.0.1 avoids Windows IPv6 delay)
+    redis_host = os.getenv("REDIS_HOST", "127.0.0.1")
+    redis_port = int(os.getenv("REDIS_PORT", "6379"))
+    r = await aioredis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
     pubsub = r.pubsub()
     
     # Subscribe to the screener updates channel

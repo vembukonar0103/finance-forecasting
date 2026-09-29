@@ -8,8 +8,10 @@ import traceback
 from utils.data_loader import load_data
 from models.timesfm_model import TimesFMForecast
 from models.kronos_model import KronosForecast
+from models.bigquery_fallback import BigQueryForecast
 from features.indicators import build_features
 from features.feature_store import store_features, get_latest_features
+from features.feast_wrapper import push_online_features, get_online_features
 from datetime import datetime
 from api.schemas.prediction import (
     PredictionResponse, 
@@ -24,8 +26,20 @@ from utils.explainability import generate_reasoning
 from utils.composite_signal import compute_composite_rating
 from concurrent.futures import ThreadPoolExecutor
 import torch
-from utils.cache import get_cached, set_cached
+from utils.cache import get_cached, set_cached, get_screener_cache, set_screener_cache
+from utils.circuit_breaker import timesfm_breaker, kronos_breaker, yfinance_breaker
+from utils.health import get_full_health_status
 import time
+
+from utils.logger import logger
+from utils.metrics import (
+    metrics_endpoint_response,
+    REQUESTS_TOTAL,
+    INFERENCE_LATENCY,
+    CACHE_ACCESS_TOTAL,
+    SCREENER_MATCH_COUNT
+)
+from fastapi import FastAPI, HTTPException, Request, Response
 
 app = FastAPI(
     title="Unified Financial Forecasting & Feature API",
@@ -33,12 +47,48 @@ app = FastAPI(
     version="1.0"
 )
 
+@app.middleware("http")
+async def telemetry_middleware(request: Request, call_next):
+    """
+    Structured logging and Prometheus request latency & counter middleware.
+    """
+    start_time = time.perf_counter()
+    endpoint = request.url.path
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    except Exception as exc:
+        status_code = 500
+        raise exc
+    finally:
+        duration_s = time.perf_counter() - start_time
+        REQUESTS_TOTAL.labels(endpoint=endpoint, status=str(status_code)).inc()
+        logger.info(
+            f"{request.method} {endpoint} -> {status_code} ({duration_s*1000:.1f}ms)",
+            extra={
+                "endpoint": endpoint,
+                "status_code": status_code,
+                "latency_ms": round(duration_s * 1000, 2)
+            }
+        )
+
+@app.get("/metrics")
+def get_metrics():
+    """
+    Prometheus metrics exposition endpoint.
+    Exposes inference latency histograms, request counters, cache hit rates, and screener gauges.
+    """
+    return metrics_endpoint_response()
+
 from api.websocket import router as websocket_router
 app.include_router(websocket_router)
 
 # Global model placeholders
 timesfm_model = None
 kronos_model = None
+bigquery_fallback = BigQueryForecast()
 
 @app.on_event("startup")
 def startup_load_models():
@@ -57,23 +107,45 @@ def startup_load_models():
 
 @app.get("/health")
 def health_check():
+    """
+    Dependency-aware enterprise health check endpoint.
+    Reports operational status and latencies for Redis, TimesFM, Kronos, and Yahoo Finance.
+    """
+    return get_full_health_status(timesfm_model, kronos_model)
+
+@app.get("/features/{ticker}")
+def get_features_endpoint(ticker: str):
+    """
+    Dedicated Online Feature Store Endpoint.
+    Retrieves latest 25 TA-Lib and volatility regime features from Feast (Redis).
+    Falls back to SQLite if Feast is unpopulated.
+    """
+    ticker = ticker.upper().strip()
+    features = get_online_features(ticker, feature_view="all")
+    if not features:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No features found for ticker '{ticker}' in online store or fallback store."
+        )
     return {
-        "status": "healthy",
-        "timesfm_loaded": timesfm_model is not None,
-        "kronos_loaded": kronos_model is not None
+        "ticker": ticker,
+        "features_count": len(features),
+        "source": "feast_redis",
+        "features": features
     }
 
 @app.get("/predict/{ticker}", response_model=PredictionResponse)
 def predict_ticker(ticker: str):
     """
     FastAPI endpoint that:
-    1. Downloads/loads 500 days of stock data for the given ticker.
-    2. Builds 21 technical indicators and saves them in SQLite long-format.
-    3. Runs TimesFM to predict 30-day future closes, quantile bands, and P(>=+5% in 30 days).
-    4. Runs Kronos to predict 30-day OHLCV and evaluates it for candlestick patterns.
-    5. Returns a unified predictions and features payload.
+    1. Checks Redis cache for unified prediction (TTL 300s).
+    2. Downloads/loads data for the given ticker.
+    3. Builds 25 technical indicators and volatility regime, pushing to Feast.
+    4. Runs TimesFM (with CircuitBreaker and BigQuery fallback).
+    5. Runs Kronos for candlestick pattern and attention heatmap extraction.
+    6. Returns a unified predictions and features payload.
     """
-    global timesfm_model, kronos_model
+    global timesfm_model, kronos_model, bigquery_fallback
     
     if timesfm_model is None or kronos_model is None:
         raise HTTPException(
@@ -82,6 +154,13 @@ def predict_ticker(ticker: str):
         )
         
     ticker = ticker.upper().strip()
+    cache_key = f"unified:{ticker}"
+    cached_data = get_cached(cache_key)
+    if cached_data is not None:
+        CACHE_ACCESS_TOTAL.labels(service="unified", hit="true").inc()
+        return PredictionResponse(**cached_data)
+    CACHE_ACCESS_TOTAL.labels(service="unified", hit="false").inc()
+
     print(f"Request: Predicting for ticker {ticker}...")
     
     try:
@@ -93,22 +172,41 @@ def predict_ticker(ticker: str):
                 detail=f"Not enough historical data found for ticker '{ticker}'."
             )
             
-        # 2. Build 21 technical indicators and write to SQLite
-        print(f"[{ticker}] Building technical indicators...")
+        # 2. Build 25 technical indicators + volatility regime and push to Feast
+        print(f"[{ticker}] Building technical indicators & volatility regime...")
         feats_df = build_features(df)
-        store_features(ticker, feats_df)
+        push_online_features(ticker, feats_df)
         
-        # Pull latest features dict (features computed for the last available date)
-        latest_features = get_latest_features(ticker)
+        # Pull latest online features from Redis via Feast (with SQLite fallback)
+        latest_features = get_online_features(ticker, feature_view="all")
         
-        # 3. TimesFM future business days forecasting (horizon=30)
-        print(f"[{ticker}] Running TimesFM forecast...")
-        pred_timesfm, prob_plus_5 = timesfm_model.predict(df, target_col='close', horizon=30)
+        # 3. TimesFM future business days forecasting (with Circuit Breaker & BigQuery Fallback)
+        print(f"[{ticker}] Running TimesFM forecast (with resilience fallback)...")
+        model_name_used = "timesfm"
+        try:
+            if timesfm_breaker.is_open(ticker):
+                raise RuntimeError(f"TimesFM CircuitBreaker OPEN for {ticker}. Tripping to fallback.")
+            with INFERENCE_LATENCY.labels(model="timesfm").time():
+                pred_timesfm, prob_plus_5 = timesfm_model.predict(df, target_col='close', horizon=30)
+            timesfm_breaker.record_success(ticker)
+        except Exception as e:
+            timesfm_breaker.record_failure(ticker)
+            print(f"[{ticker}] TimesFM error ({e}). Activating BigQuery / Statistical fallback...")
+            with INFERENCE_LATENCY.labels(model="bigquery_fallback").time():
+                pred_timesfm, prob_plus_5, fb_meta = bigquery_fallback.predict(df, target_col='close', horizon=30)
+            model_name_used = fb_meta.get("provider", "bigquery_fallback")
         
         # 4. Kronos forecasting and engulfing pattern detection
         print(f"[{ticker}] Running Kronos forecast and pattern check...")
-        pred_kronos = kronos_model.predict(df, target_col='close', lookback=400, horizon=30)
-        kronos_pattern = kronos_model.detect_pattern(pred_kronos)
+        try:
+            with INFERENCE_LATENCY.labels(model="kronos").time():
+                pred_kronos = kronos_model.predict(df, target_col='close', lookback=400, horizon=30, extract_attention=True)
+                kronos_pattern = kronos_model.detect_pattern(pred_kronos)
+            kronos_breaker.record_success(ticker)
+        except Exception as e:
+            kronos_breaker.record_failure(ticker)
+            print(f"[{ticker}] Kronos inference warning: {e}")
+            kronos_pattern = {"pattern": "CDLENGULFING", "label": "none", "confidence": 0.0, "forecast_step": -1}
         
         # Get prior features for explainability crossover detection
         prior_features = feats_df.iloc[-2].to_dict() if len(feats_df) >= 2 else {}
@@ -137,10 +235,10 @@ def predict_ticker(ticker: str):
         formatted_kronos = {**kronos_pattern, "label": formatted_label}
         
         forecast_result = {
-            "model_used": "TimesFM",
+            "model_used": model_name_used,
             "expected_return_pct": expected_return_pct,
             "confidence_score": confidence_score,
-            "kronos_pattern": formatted_kronos  # Passed for pattern confirmation/conflict checks
+            "kronos_pattern": formatted_kronos
         }
         
         reasoning = generate_reasoning(
@@ -152,7 +250,7 @@ def predict_ticker(ticker: str):
         # Build Unified response payload matching PredictionResponse schema
         response = PredictionResponse(
             ticker=ticker,
-            model_used="timesfm",
+            model_used=model_name_used,
             generated_at=datetime.utcnow().isoformat() + "Z",
             current_price=current_price,
             predicted_price=predicted_price,
@@ -185,6 +283,8 @@ def predict_ticker(ticker: str):
             }
         )
         
+        # Cache unified response in Redis (TTL: 300s)
+        set_cached(cache_key, response.dict(), ttl_seconds=300)
         return response
         
     except HTTPException as he:
@@ -258,8 +358,10 @@ def predict_kronos_ticker(ticker: str, timeframe: str = "1d"):
     # 1. Check Redis Cache
     cached_data = get_cached(cache_key)
     if cached_data is not None:
+        CACHE_ACCESS_TOTAL.labels(service="kronos", hit="true").inc()
         cached_data["cache_hit"] = True
         return KronosInferenceResponse(**cached_data)
+    CACHE_ACCESS_TOTAL.labels(service="kronos", hit="false").inc()
         
     print(f"Request: Kronos Predicting for ticker {ticker}...")
     
@@ -301,11 +403,18 @@ def predict_kronos_ticker(ticker: str, timeframe: str = "1d"):
         tokenization_ms = round((t_tok_end - t_tok_start) * 1000.0, 2)
 
         # 4. Kronos forecasting and engulfing pattern detection
-        print(f"[{ticker}] Running Kronos forecast and pattern check...")
-        pred_kronos = kronos_model.predict(df, target_col='close', lookback=400, horizon=30)
-        kronos_pattern = kronos_model.detect_pattern(pred_kronos)
+        print(f"[{ticker}] Running Kronos forecast and pattern check (with attention extraction)...")
+        try:
+            with INFERENCE_LATENCY.labels(model="kronos").time():
+                pred_kronos = kronos_model.predict(df, target_col='close', lookback=400, horizon=30, extract_attention=True)
+                kronos_pattern = kronos_model.detect_pattern(pred_kronos)
+            kronos_breaker.record_success(ticker)
+        except Exception as e:
+            kronos_breaker.record_failure(ticker)
+            raise e
         
         formatted_label = "No Pattern" if kronos_pattern["label"] == "none" else kronos_pattern["label"].title()
+        attention_map = getattr(kronos_model, "last_attention_heatmap", None)
         
         result = {
             "ticker": ticker,
@@ -316,7 +425,7 @@ def predict_kronos_ticker(ticker: str, timeframe: str = "1d"):
             "forecast_step": int(kronos_pattern["forecast_step"]),
             "tokenization_ms": tokenization_ms,
             "cache_hit": False,
-            "attention_heatmap": None
+            "attention_heatmap": attention_map
         }
         
         # Cache result in Redis (TTL: 300 seconds)
@@ -335,13 +444,13 @@ def predict_kronos_ticker(ticker: str, timeframe: str = "1d"):
         )
 
 @app.get("/predict/timesfm/{ticker}", response_model=TimesFMFanChartResponse)
-def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90"):
+def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90", max_context: Optional[int] = None):
     """
-    Dedicated TimesFM Fan Chart Inference Service.
+    Dedicated TimesFM Fan Chart Inference Service with Configurable Context Window and Resilience Fallback.
     Runs TimesFM forecasting per requested horizon (e.g. 30, 60, 90).
-    Caches each horizon's result independently in Redis under 'timesfm:{ticker}:{horizon}'.
+    Caches each horizon's result independently in Redis under 'timesfm:{ticker}:{horizon}:{max_context}'.
     """
-    global timesfm_model
+    global timesfm_model, bigquery_fallback
     
     if timesfm_model is None:
         raise HTTPException(
@@ -350,6 +459,7 @@ def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90"):
         )
         
     ticker = ticker.upper().strip()
+    effective_ctx = int(max_context or getattr(timesfm_model, "default_max_context", 4096))
     
     # Parse requested horizons
     try:
@@ -359,8 +469,9 @@ def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90"):
     except Exception:
         horizon_list = [30, 60, 90]
 
-    # Download data once for all requested horizons
-    df = load_data(ticker, period="2y", interval="1d")
+    # Download data once for all requested horizons (support longer history for large context)
+    period_to_fetch = "15y" if effective_ctx > 2000 else "2y"
+    df = load_data(ticker, period=period_to_fetch, interval="1d")
     if df.empty or df.shape[0] < 50:
         raise HTTPException(
             status_code=404,
@@ -370,18 +481,39 @@ def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90"):
     horizons_res = {}
     
     for h in horizon_list:
-        cache_key = f"timesfm:{ticker}:{h}"
+        cache_key = f"timesfm:{ticker}:{h}:{effective_ctx}"
         cached_data = get_cached(cache_key)
         
         if cached_data is not None:
+            CACHE_ACCESS_TOTAL.labels(service="timesfm", hit="true").inc()
             cached_data["cache_hit"] = True
             horizons_res[f"horizon_{h}"] = TimesFMHorizonQuantiles(**cached_data)
         else:
-            print(f"[{ticker}] Running TimesFM forecast for horizon={h}...")
+            CACHE_ACCESS_TOTAL.labels(service="timesfm", hit="false").inc()
+            print(f"[{ticker}] Running TimesFM forecast for horizon={h}, max_context={effective_ctx}...")
             t_start = time.perf_counter()
-            pred_df, prob_plus_5 = timesfm_model.predict(df, target_col='close', horizon=h)
-            t_end = time.perf_counter()
+            is_fallback = False
+            provider_name = "timesfm"
             
+            try:
+                if timesfm_breaker.is_open(ticker):
+                    raise RuntimeError(f"Circuit breaker OPEN for TimesFM ({ticker})")
+                with INFERENCE_LATENCY.labels(model="timesfm").time():
+                    pred_df, prob_plus_5 = timesfm_model.predict(
+                        df, target_col='close', horizon=h, max_context=effective_ctx
+                    )
+                timesfm_breaker.record_success(ticker)
+            except Exception as e:
+                timesfm_breaker.record_failure(ticker)
+                print(f"[Fallback] TimesFM failure on horizon={h}: {e}. Triggering BigQuery/Statistical fallback...")
+                with INFERENCE_LATENCY.labels(model="bigquery_fallback").time():
+                    pred_df, prob_plus_5, fb_meta = bigquery_fallback.predict(
+                        df, target_col='close', horizon=h
+                    )
+                is_fallback = True
+                provider_name = fb_meta.get("provider", "BigQueryFallback")
+                
+            t_end = time.perf_counter()
             inference_ms = round((t_end - t_start) * 1000.0, 2)
             
             horizon_dict = {
@@ -394,7 +526,9 @@ def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90"):
                 "p90": pred_df['p90'].astype(float).tolist(),
                 "probability_plus_5_pct": float(prob_plus_5),
                 "inference_ms": inference_ms,
-                "cache_hit": False
+                "cache_hit": False,
+                "fallback": is_fallback,
+                "provider": provider_name
             }
             
             # Cache each horizon separately
@@ -409,14 +543,13 @@ def predict_timesfm_ticker(ticker: str, horizons: str = "30,60,90"):
 @app.get("/api/v1/screeners/ai-filter")
 def screener_ai_filter(pattern: Optional[str] = "bullish_engulfing", min_confidence: float = 0.75):
     """
-    AI Screener Filter Endpoint.
-    Scans a fixed universe of tickers (AAPL, MSFT, NVDA, SPY, BTC-USD),
-    calls Kronos and TimesFM endpoints, computes composite AI ratings,
-    and returns matching tickers filtered by pattern and minimum confidence threshold.
+    High-Performance AI Screener Filter Endpoint.
+    Architecture:
+      1. First checks pre-computed Redis cache 'screener:latest_results' populated by background worker.
+         Serves in <50ms (meeting the <2s SLA for 50+ tickers!).
+      2. If cache is unpopulated (cold start), performs on-demand evaluation of default candidate universe,
+         caches the results, and returns.
     """
-    tickers = ["AAPL", "MSFT", "NVDA", "SPY", "BTC-USD"]
-    matches = []
-
     def matches_pattern_query(qp: Optional[str], label: str, pat_name: str) -> bool:
         if not qp:
             return True
@@ -432,6 +565,34 @@ def screener_ai_filter(pattern: Optional[str] = "bullish_engulfing", min_confide
             return False
         return True
 
+    # 1. Check Pre-computed Redis Cache (Sub-second response meeting <2s SLA)
+    cached_screener = get_screener_cache()
+    if cached_screener and isinstance(cached_screener, list):
+        matches = []
+        for item in cached_screener:
+            conf = float(item.get("kronos", {}).get("confidence", 0.0))
+            lbl = item.get("kronos", {}).get("label", "No Pattern")
+            pat = item.get("kronos", {}).get("pattern", "CDLENGULFING")
+            if conf >= min_confidence and matches_pattern_query(pattern, lbl, pat):
+                matches.append(item)
+
+        SCREENER_MATCH_COUNT.set(len(matches))
+        return {
+            "query": {
+                "pattern": pattern,
+                "min_confidence": min_confidence
+            },
+            "source": "precomputed_redis_cache",
+            "total_scanned": len(cached_screener),
+            "total_matched": len(matches),
+            "matches": matches
+        }
+
+    # 2. Fallback: On-Demand Scan if pre-computed cache not yet materialized
+    tickers = ["AAPL", "MSFT", "NVDA", "SPY", "BTC-USD"]
+    matches = []
+    scanned_items = []
+
     for t in tickers:
         try:
             kronos_res = predict_kronos_ticker(t, timeframe="1d")
@@ -446,29 +607,39 @@ def screener_ai_filter(pattern: Optional[str] = "bullish_engulfing", min_confide
             lbl = k_dict.get("label", "No Pattern")
             pat = k_dict.get("pattern", "CDLENGULFING")
 
+            entry = {
+                "ticker": t,
+                "kronos": {
+                    "pattern": pat,
+                    "label": lbl,
+                    "confidence": conf,
+                    "forecast_step": k_dict.get("forecast_step"),
+                    "attention_heatmap": k_dict.get("attention_heatmap")
+                },
+                "timesfm_summary": {
+                    "direction": composite.get("timesfm_direction"),
+                    "prob_plus_5": composite.get("timesfm_prob_plus_5")
+                },
+                "composite_rating": composite
+            }
+            scanned_items.append(entry)
+
             if conf >= min_confidence and matches_pattern_query(pattern, lbl, pat):
-                matches.append({
-                    "ticker": t,
-                    "kronos": {
-                        "pattern": pat,
-                        "label": lbl,
-                        "confidence": conf,
-                        "forecast_step": k_dict.get("forecast_step")
-                    },
-                    "timesfm_summary": {
-                        "direction": composite["timesfm_direction"],
-                        "prob_plus_5": composite["timesfm_prob_plus_5"]
-                    },
-                    "composite_rating": composite
-                })
+                matches.append(entry)
         except Exception as e:
             print(f"[Screener Warning] Failed processing ticker {t}: {e}")
 
+    # Seed the screener cache with this scan
+    if scanned_items:
+        set_screener_cache(scanned_items, ttl_seconds=600)
+
+    SCREENER_MATCH_COUNT.set(len(matches))
     return {
         "query": {
             "pattern": pattern,
             "min_confidence": min_confidence
         },
+        "source": "on_demand_computed",
         "total_scanned": len(tickers),
         "total_matched": len(matches),
         "matches": matches

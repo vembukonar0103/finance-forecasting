@@ -1,0 +1,71 @@
+# config/universe.yaml
+# Complete Asset Universe for Quantitative Screening & Forecasting
+
+equities_mega_cap:
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - AMZN
+  - META
+  - BRK-B
+  - LLY
+  - TSLA
+  - AVGO
+  - JPM
+  - V
+  - UNH
+  - XOM
+  - WMT
+  - MA
+  - JNJ
+  - PG
+  - COST
+  - HD
+
+equities_large_cap:
+  - MRK
+  - ABBV
+  - CVX
+  - ORCL
+  - BAC
+  - AMD
+  - CRM
+  - NFLX
+  - PEP
+  - KO
+  - TMO
+  - QCOM
+  - LIN
+  - WFC
+  - DIS
+  - CSCO
+  - ADBE
+  - TXN
+  - INTU
+  - GE
+  - PM
+  - IBM
+  - AMAT
+  - CAT
+  - VZ
+  - NOW
+  - ISRG
+  - AXP
+  - UBER
+  - MS
+
+crypto:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - BNB-USD
+
+etfs:
+  - SPY
+  - QQQ
+  - IWM
+  - DIA
+  - XLF
+  - XLK
+  - XLE
